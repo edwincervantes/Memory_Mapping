@@ -8,10 +8,10 @@
  * ============================================================
  *  WORK SPLIT GUIDE
  * ============================================================
- *  Partner A owns: TLB logic, address translation pipeline,
+ *  Edwin owns: TLB logic, address translation pipeline,
  *                  statistics reporting, and Phase 2 page replacement
  *
- *  Partner B owns: Page table, physical memory / backing store I/O,
+ *  Sean owns: Page table, physical memory / backing store I/O,
  *                  page fault handler, and main() / output formatting
  * 
 * ============================================================
@@ -104,15 +104,11 @@ void open_backing_store(const char *filename) {
     /* TODO [PARTNER B]: open the file and store the handle in backing_store */
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  PARTNER A – TLB Management
- * ═══════════════════════════════════════════════════════════ */
 
 /**
  * tlb_lookup()
  * Search the TLB for a given page number.
- *
- * [PARTNER A] TODO:
+*
  *   1. Iterate through tlb[].
  *   2. If an entry's page_number matches, increment tlb_hits and
  *      return the corresponding frame_number.
@@ -122,15 +118,22 @@ void open_backing_store(const char *filename) {
  * @return             Frame number on hit, -1 on miss.
  */
 int tlb_lookup(int page_number) {
-    /* TODO [PARTNER A]: implement TLB search */
-    return -1; /* placeholder */
+    /* Iterate through all TLB entries looking for a match */
+    for (int i = 0; i < TLB_SIZE; i++) {
+        if (tlb[i].page_number == page_number) {
+            /* TLB hit - increment counter and return frame number */
+            tlb_hits++;
+            return tlb[i].frame_number;
+        }
+    }
+    /* TLB miss - page not found in TLB */
+    return -1;
 }
 
 /**
  * tlb_update()
  * Insert or update a TLB entry using FIFO replacement.
  *
- * [PARTNER A] TODO:
  *   1. Write the new (page_number, frame_number) pair into
  *      tlb[tlb_next_slot].
  *   2. Advance tlb_next_slot with wrap-around (mod TLB_SIZE).
@@ -139,7 +142,12 @@ int tlb_lookup(int page_number) {
  * @param frame_number  Corresponding frame number.
  */
 void tlb_update(int page_number, int frame_number) {
-    /* TODO [PARTNER A]: implement FIFO TLB insertion */
+    /* Insert new entry at the current FIFO slot */
+    tlb[tlb_next_slot].page_number = page_number;
+    tlb[tlb_next_slot].frame_number = frame_number;
+
+    /* Advance to next slot with wrap-around */
+    tlb_next_slot = (tlb_next_slot + 1) % TLB_SIZE;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -172,15 +180,10 @@ int handle_page_fault(int page_number) {
     return -1; /* placeholder */
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  PARTNER A – Address Translation
- * ═══════════════════════════════════════════════════════════ */
-
 /**
  * translate_address()
  * Translate a logical address to a physical address and retrieve the byte.
  *
- * [PARTNER A] TODO – wire the pipeline together:
  *   1. Mask the logical address to 16 bits (ADDRESS_MASK).
  *   2. Extract the page number  : (masked >> 8) & 0xFF
  *   3. Extract the page offset  : masked & 0xFF
@@ -201,18 +204,52 @@ int handle_page_fault(int page_number) {
  * @param logical_address  The raw integer read from addresses.txt.
  */
 void translate_address(int logical_address) {
-    /* TODO [PARTNER A]: implement full translation pipeline */
+    /* 1. Mask the logical address to 16 bits */
+    int masked_address = logical_address & ADDRESS_MASK;
+
+    /* 2. Extract the page number (upper 8 bits) */
+    int page_number = (masked_address >> 8) & 0xFF;
+
+    /* 3. Extract the page offset (lower 8 bits) */
+    int offset = masked_address & 0xFF;
+
+    int frame_number;
+
+    /* 4. Try TLB lookup first */
+    frame_number = tlb_lookup(page_number);
+
+    if (frame_number == -1) {
+        /* TLB miss - check the page table */
+        if (page_table[page_number].valid == 1) {
+            /* Page is in memory - get frame from page table */
+            frame_number = page_table[page_number].frame_number;
+        } else {
+            /* Page fault - load page from backing store */
+            frame_number = handle_page_fault(page_number);
+        }
+        /* Update TLB with the new mapping */
+        tlb_update(page_number, frame_number);
+    }
+
+    /* 5. Compute physical address */
+    int physical_address = frame_number * FRAME_SIZE + offset;
+
+    /* 6. Read the signed byte from physical memory */
+    signed char value = physical_memory[physical_address];
+
+    /* 7. Print output line */
+    printf("Virtual address: %d Physical address: %d Value: %d\n",
+           logical_address, physical_address, value);
+
+    /* 8. Increment total addresses counter */
+    total_addresses++;
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  PARTNER A – Statistics
- * ═══════════════════════════════════════════════════════════ */
 
 /**
  * print_statistics()
  * Print TLB hit rate and page-fault rate after all addresses are processed.
  *
- * [PARTNER A] TODO:
  *   1. Compute TLB hit rate   = (tlb_hits   / (double)total_addresses) * 100
  *   2. Compute page fault rate = (page_faults / (double)total_addresses) * 100
  *   3. Print both as percentages with at least 2 decimal places.
@@ -221,7 +258,15 @@ void translate_address(int logical_address) {
  *         "Page Fault Rate: 24.40%"
  */
 void print_statistics(void) {
-    /* TODO [PARTNER A]: compute and print statistics */
+    /* Compute TLB hit rate as a percentage */
+    double tlb_hit_rate = (tlb_hits / (double)total_addresses) * 100.0;
+
+    /* Compute page fault rate as a percentage */
+    double page_fault_rate = (page_faults / (double)total_addresses) * 100.0;
+
+    /* Print statistics with 2 decimal places */
+    printf("TLB Hit Rate: %.2f%%\n", tlb_hit_rate);
+    printf("Page Fault Rate: %.2f%%\n", page_fault_rate);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -249,7 +294,7 @@ int main(int argc, char *argv[]) {
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  PHASE 2 – Page Replacement  [PARTNER A]
+ *  PHASE 2 – Page Replacement  Edwin will implement this part after Phase 1 is working correctly.
  * ═══════════════════════════════════════════════════════════
  *
  * Phase 2 reduces physical memory to 128 frames (NUM_FRAMES_PHASE2).
