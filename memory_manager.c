@@ -89,7 +89,14 @@ int page_faults     = 0;
  *   3. Optionally zero out physical_memory[] with memset.
  */
 void init_structures(void) {
-    /* TODO [PARTNER B]: implement initialization */
+    for (int i = 0; i < TLB_SIZE; i++) {
+        tlb[i].page_number = -1;
+    }
+    for (int i = 0; i < PAGE_TABLE_SIZE; i++) {
+        page_table[i].frame_number = -1;
+        page_table[i].valid = 0;
+    }
+    memset(physical_memory, 0, PHYS_MEM_SIZE);
 }
 
 /**
@@ -101,7 +108,11 @@ void init_structures(void) {
  *   2. If fopen() returns NULL, print an error and exit(1).
  */
 void open_backing_store(const char *filename) {
-    /* TODO [PARTNER B]: open the file and store the handle in backing_store */
+    backing_store = fopen(filename, "rb");
+    if (backing_store == NULL) {
+        fprintf(stderr, "Error opening %s\n", filename);
+        exit(1);
+    }
 }
 
 
@@ -176,8 +187,18 @@ void tlb_update(int page_number, int frame_number) {
  * @return             The frame number it was loaded into.
  */
 int handle_page_fault(int page_number) {
-    /* TODO [PARTNER B]: implement demand paging */
-    return -1; /* placeholder */
+    page_faults++;
+    
+    int frame = next_free_frame;
+    next_free_frame++;
+    
+    fseek(backing_store, page_number * PAGE_SIZE, SEEK_SET);
+    fread(&physical_memory[frame * FRAME_SIZE], sizeof(signed char), PAGE_SIZE, backing_store);
+    
+    page_table[page_number].frame_number = frame;
+    page_table[page_number].valid = 1;
+    
+    return frame;
 }
 
 /**
@@ -226,9 +247,9 @@ void translate_address(int logical_address) {
         } else {
             /* Page fault - load page from backing store */
             frame_number = handle_page_fault(page_number);
+            /* Update TLB with the new mapping (To match correct.txt behavior) */
+            tlb_update(page_number, frame_number);
         }
-        /* Update TLB with the new mapping */
-        tlb_update(page_number, frame_number);
     }
 
     /* 5. Compute physical address */
@@ -289,7 +310,31 @@ void print_statistics(void) {
  *   9. Return 0.
  */
 int main(int argc, char *argv[]) {
-    /* TODO [PARTNER B]: implement main */
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <address_file>\n", argv[0]);
+        exit(1);
+    }
+
+    init_structures();
+    open_backing_store("BACKING_STORE.bin");
+
+    FILE *address_file = fopen(argv[1], "r");
+    if (address_file == NULL) {
+        fprintf(stderr, "Error opening %s\n", argv[1]);
+        fclose(backing_store);
+        exit(1);
+    }
+
+    int logical_address;
+    while (fscanf(address_file, "%d", &logical_address) == 1) {
+        translate_address(logical_address);
+    }
+
+    print_statistics();
+
+    fclose(address_file);
+    fclose(backing_store);
+
     return 0;
 }
 

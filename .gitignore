@@ -1,0 +1,14 @@
+# Compiled executables
+*.exe
+*.out
+*.o
+a.out
+a.exe
+memory_manager.exe
+
+# Temporary test scripts
+test_tlb.c
+test_tlb2.c
+test_tlb.exe
+test_tlb2.exe
+
