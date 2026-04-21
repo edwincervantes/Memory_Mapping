@@ -32,13 +32,13 @@ gcc memory_manager.c -o memory_manager
 
 For each address in `addresses.txt`, the program outputs:
 ```
-Virtual address: <logical_addr> Physical address: <physical_addr> Value: <signed_byte>
+0x<virtual_addr> -> 0x<physical_addr>: <signed_byte>
 ```
 
 After processing all addresses, it prints statistics:
 ```
-TLB Hit Rate: X.XX%
-Page Fault Rate: X.XX%
+Page-fault rate: X.XX%
+TLB hit rate: X.XX%
 ```
 
 ## Verifying Output
@@ -48,3 +48,28 @@ To check if your output matches the expected results:
 ./memory_manager addresses.txt > output.txt
 diff output.txt correct.txt
 ```
+
+## Phase 2: Page Replacement
+
+Phase 2 reduces physical memory from 256 frames to 128 frames, requiring FIFO page replacement when memory is full.
+
+### Enabling Phase 2
+
+**Option 1:** Edit `memory_manager.c` and uncomment the `USE_PHASE2` definition at the top:
+```c
+#define USE_PHASE2
+```
+
+**Option 2:** Compile with the flag:
+```bash
+gcc -DUSE_PHASE2 memory_manager.c -o memory_manager
+```
+
+### Expected Results
+
+| Phase | Frames | Page-fault rate | TLB hit rate |
+|-------|--------|-----------------|--------------|
+| 1     | 256    | 24.90%          | 5.50%        |
+| 2     | 128    | 53.60%          | 4.80%        |
+
+Phase 2 has a higher page-fault rate because pages must be evicted and reloaded more frequently with limited memory.
