@@ -21,19 +21,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ── Phase Selection ─────────────────────────────────────── */
+/* Uncomment the line below to enable Phase 2 (128 frames + FIFO replacement) */
+#define USE_PHASE2 
+
 /* ── Constants ───────────────────────────────────────────── */
 #define PAGE_TABLE_SIZE   256       /* 2^8 entries                  */
 #define TLB_SIZE           16       /* 16 TLB entries               */
 #define PAGE_SIZE         256       /* 256 bytes per page           */
 #define FRAME_SIZE        256       /* 256 bytes per frame          */
+
+#ifdef USE_PHASE2
+#define NUM_FRAMES        128       /* Phase 2: 128 frames          */
+#else
 #define NUM_FRAMES        256       /* Phase 1: 256 frames          */
-#define PHYS_MEM_SIZE  (FRAME_SIZE * NUM_FRAMES)  /* 65,536 bytes   */
+#endif
+
+#define PHYS_MEM_SIZE  (FRAME_SIZE * NUM_FRAMES)  /* Physical memory size */
 #define ADDRESS_MASK   0xFFFF       /* mask to 16-bit address       */
 #define PAGE_MASK      0xFF00       /* upper 8 bits = page number   */
 #define OFFSET_MASK    0x00FF       /* lower 8 bits = offset        */
-
-/* Phase 2 constant – change NUM_FRAMES to this value for part 2   */
-#define NUM_FRAMES_PHASE2 128
 
 /* ── Data Structures ─────────────────────────────────────── */
 
@@ -48,6 +55,15 @@ typedef struct {
     int frame_number;  /* -1 means page is NOT in memory */
     int valid;         /* 1 = in memory, 0 = not loaded  */
 } PageTableEntry;
+
+#ifdef USE_PHASE2
+/* FIFO queue for page replacement - tracks page number in each frame */
+int frame_to_page[NUM_FRAMES];     /* Maps frame -> page number occupying it */
+int fifo_queue[NUM_FRAMES];        /* FIFO queue of frame numbers            */
+int fifo_head = 0;                 /* Front of queue (next to evict)         */
+int fifo_tail = 0;                 /* Back of queue (next insertion point)   */
+int fifo_count = 0;                /* Number of frames in use                */
+#endif
 
 /* ── Global State ────────────────────────────────────────── */
 
@@ -74,15 +90,11 @@ int total_addresses = 0;
 int tlb_hits        = 0;
 int page_faults     = 0;
 
-/* ═══════════════════════════════════════════════════════════
- *  PARTNER B – Initialization
- * ═══════════════════════════════════════════════════════════ */
 
 /**
  * init_structures()
  * Initialize the TLB, page table, and physical memory to empty/invalid state.
  *
- * [PARTNER B] TODO:
  *   1. Loop over tlb[] and set every entry's page_number to -1 (empty).
  *   2. Loop over page_table[] and set every entry's frame_number to -1
  *      and valid to 0.
@@ -97,6 +109,17 @@ void init_structures(void) {
         page_table[i].valid = 0;
     }
     memset(physical_memory, 0, PHYS_MEM_SIZE);
+
+#ifdef USE_PHASE2
+    /* Initialize FIFO queue and frame-to-page mapping */
+    for (int i = 0; i < NUM_FRAMES; i++) {
+        frame_to_page[i] = -1;
+        fifo_queue[i] = -1;
+    }
+    fifo_head = 0;
+    fifo_tail = 0;
+    fifo_count = 0;
+#endif
 }
 
 /**
@@ -161,15 +184,28 @@ void tlb_update(int page_number, int frame_number) {
     tlb_next_slot = (tlb_next_slot + 1) % TLB_SIZE;
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  PARTNER B – Page Fault Handler & Physical Memory
- * ═══════════════════════════════════════════════════════════ */
+#ifdef USE_PHASE2
+/**
+ * tlb_remove()
+ * Remove a page from the TLB when it is evicted from physical memory.
+ *
+ * @param page_number  The page number to remove from TLB.
+ */
+void tlb_remove(int page_number) {
+    for (int i = 0; i < TLB_SIZE; i++) {
+        if (tlb[i].page_number == page_number) {
+            tlb[i].page_number = -1;
+            tlb[i].frame_number = -1;
+            return;
+        }
+    }
+}
+#endif
+
 
 /**
  * handle_page_fault()
  * Load a page from the backing store into physical memory.
- *
- * [PARTNER B] TODO:
  *   1. Increment the page_faults counter.
  *   2. Determine the target frame (use next_free_frame for Phase 1).
  *      Increment next_free_frame after allocation.
@@ -188,16 +224,52 @@ void tlb_update(int page_number, int frame_number) {
  */
 int handle_page_fault(int page_number) {
     page_faults++;
-    
-    int frame = next_free_frame;
+
+    int frame;
+
+#ifdef USE_PHASE2
+    /* Phase 2: Use FIFO replacement when all frames are occupied */
+    if (fifo_count < NUM_FRAMES) {
+        /* Free frames available - use next free frame */
+        frame = next_free_frame;
+        next_free_frame++;
+        fifo_count++;
+    } else {
+        /* No free frames - evict the oldest page (FIFO) */
+        frame = fifo_queue[fifo_head];
+        int evicted_page = frame_to_page[frame];
+
+        /* Invalidate the evicted page in the page table */
+        page_table[evicted_page].frame_number = -1;
+        page_table[evicted_page].valid = 0;
+
+        /* Remove evicted page from TLB if present */
+        tlb_remove(evicted_page);
+
+        /* Advance FIFO head */
+        fifo_head = (fifo_head + 1) % NUM_FRAMES;
+    }
+
+    /* Add this frame to the back of the FIFO queue */
+    fifo_queue[fifo_tail] = frame;
+    fifo_tail = (fifo_tail + 1) % NUM_FRAMES;
+
+    /* Update frame-to-page mapping */
+    frame_to_page[frame] = page_number;
+#else
+    /* Phase 1: Simple allocation (no replacement needed) */
+    frame = next_free_frame;
     next_free_frame++;
-    
+#endif
+
+    /* Load the page from backing store into physical memory */
     fseek(backing_store, page_number * PAGE_SIZE, SEEK_SET);
     fread(&physical_memory[frame * FRAME_SIZE], sizeof(signed char), PAGE_SIZE, backing_store);
-    
+
+    /* Update page table */
     page_table[page_number].frame_number = frame;
     page_table[page_number].valid = 1;
-    
+
     return frame;
 }
 
@@ -258,9 +330,9 @@ void translate_address(int logical_address) {
     /* 6. Read the signed byte from physical memory */
     signed char value = physical_memory[physical_address];
 
-    /* 7. Print output line */
-    printf("Virtual address: %d Physical address: %d Value: %d\n",
-           logical_address, physical_address, value);
+    /* 7. Print output line (hex format) */
+    printf("0x%04x -> 0x%04x: %d\n",
+           masked_address, physical_address, value);
 
     /* 8. Increment total addresses counter */
     total_addresses++;
@@ -286,18 +358,13 @@ void print_statistics(void) {
     double page_fault_rate = (page_faults / (double)total_addresses) * 100.0;
 
     /* Print statistics with 2 decimal places */
-    printf("TLB Hit Rate: %.2f%%\n", tlb_hit_rate);
-    printf("Page Fault Rate: %.2f%%\n", page_fault_rate);
+    printf("Page-fault rate: %.2f%%\n", page_fault_rate);
+    printf("TLB hit rate: %.2f%%\n", tlb_hit_rate);
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  PARTNER B – main()
- * ═══════════════════════════════════════════════════════════ */
 
 /**
  * main()
- *
- * [PARTNER B] TODO:
  *   1. Validate command-line arguments (expect exactly 1: the address file).
  *      Print usage and exit(1) if missing.
  *   2. Call init_structures().
@@ -338,30 +405,3 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  PHASE 2 – Page Replacement  Edwin will implement this part after Phase 1 is working correctly.
- * ═══════════════════════════════════════════════════════════
- *
- * Phase 2 reduces physical memory to 128 frames (NUM_FRAMES_PHASE2).
- * When all frames are occupied, a page-replacement policy is needed.
- *
- * [PARTNER A] TODO:
- *   1. Add a "frame free list" or occupancy tracker (e.g., a boolean
- *      array free_frames[NUM_FRAMES_PHASE2]).
- *   2. Implement FIFO or LRU replacement:
- *
- *      FIFO: maintain a queue of frame numbers in allocation order.
- *            When no free frame exists, evict the front of the queue,
- *            invalidate its page_table entry (valid=0, frame=-1),
- *            and also remove it from the TLB if present.
- *
- *      LRU:  maintain a "last used" timestamp per frame (increment a
- *            global clock on every access). Evict the frame with the
- *            smallest timestamp.
- *
- *   3. Modify handle_page_fault() to use this logic when
- *      next_free_frame >= NUM_FRAMES_PHASE2.
- *
- *   Tip: isolate this behind a #define USE_PHASE2 guard so Phase 1
- *   still compiles and passes tests independently.
- */
