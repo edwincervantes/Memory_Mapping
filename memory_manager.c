@@ -247,7 +247,7 @@ void translate_address(int logical_address) {
         } else {
             /* Page fault - load page from backing store */
             frame_number = handle_page_fault(page_number);
-            /* Update TLB with the new mapping (To match correct.txt behavior) */
+            /* Update TLB with the new mapping */
             tlb_update(page_number, frame_number);
         }
     }
